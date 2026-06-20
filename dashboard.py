@@ -6,8 +6,8 @@ import matplotlib.pyplot as plt
 
 # Set page configuration with a modern dark theme aesthetic
 st.set_page_config(
-    page_title="Antigravity AI - Inventory Demand Forecasting",
-    page_icon="🚀",
+    page_title="Global Manufacturing Inventory Forecast Platform",
+    page_icon="🏭",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -40,8 +40,8 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.title("🚀 Antigravity AI Inventory Forecasting Dashboard")
-st.markdown("### Exascale Computing & AVX2 Accelerated Optimization Engine")
+st.title("🏭 Global Manufacturing & Supply Chain Demand Forecaster")
+st.markdown("### HPC-Accelerated Exascale Analytics & AVX2 SIMD Optimization Engine")
 
 # Connect to MongoDB with Fallback
 @st.cache_resource
@@ -72,7 +72,7 @@ if not connected:
     
     df_items = pd.DataFrame({
         "sku": skus,
-        "description": [f"High performance processor module {i}" for i in range(25)],
+        "description": [f"Industrial manufacturing raw component batch {i}" for i in range(25)],
         "forecast": [mock_forecast[sku] for sku in skus],
         "current_stock": np.random.randint(10, 80, size=25).tolist()
     })
