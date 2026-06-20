@@ -3,10 +3,11 @@ import pymongo
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+import io
 
 # Set page configuration with a modern dark theme aesthetic
 st.set_page_config(
-    page_title="Global Manufacturing Inventory Forecast Platform",
+    page_title="Apex Global Supply Chain Engine",
     page_icon="🏭",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -30,30 +31,30 @@ st.markdown("""
         -webkit-text-fill-color: transparent;
     }
     .metric-card {
-        background: rgba(255, 255, 255, 0.03);
+        background: rgba(255, 255, 255, 0.02);
         border-radius: 12px;
         padding: 20px;
-        border: 1px dashed rgba(255, 255, 255, 0.1);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        box-shadow: 0 4px 30px rgba(0, 0, 0, 0.1);
         backdrop-filter: blur(10px);
         margin-bottom: 20px;
     }
-    .status-safe {
-        color: #39ff14;
-        font-weight: bold;
+    .metric-card h4 {
+        color: #a0aec0;
+        margin-bottom: 8px;
+        font-size: 14px;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
     }
-    .status-reorder {
-        color: #ffaa00;
-        font-weight: bold;
-    }
-    .status-critical {
-        color: #ff007f;
-        font-weight: bold;
+    .metric-card h2 {
+        margin: 0;
+        font-size: 28px;
     }
 </style>
 """, unsafe_allow_html=True)
 
-st.title("🏭 Global Manufacturing & Supply Chain Demand Forecaster")
-st.markdown("### HPC-Accelerated Exascale Analytics & AVX2 SIMD Optimization Engine")
+st.title("🏭 APEX Global Manufacturing Control Center")
+st.markdown("##### Production-Grade Demand Forecasting, Safety Stock Planning, and Inventory Simulation")
 
 # Connect to MongoDB with Fallback
 @st.cache_resource
@@ -67,216 +68,324 @@ def get_db_connection():
 
 db, connected = get_db_connection()
 
-# Dynamic parameters in Sidebar for real-time recalculation
-st.sidebar.header("⚙️ Supply Chain Controls")
-lead_time = st.sidebar.slider("Estimated Lead Time (Days)", 1, 15, 5)
-service_level = st.sidebar.selectbox("Target Service Level (Confidence)", ["90%", "95%", "99%"], index=1)
+# Sidebar Setup
+st.sidebar.image("https://img.icons8.com/nolan/96/factory.png", width=70)
+st.sidebar.markdown("### **Operational Controls**")
+
+lead_time = st.sidebar.slider("Lead Time / Replenishment Window (Days)", 1, 30, 5, help="Time taken for shipment delivery from supplier.")
+service_level = st.sidebar.select_slider(
+    "Target Service Level (Coverage)",
+    options=["85%", "90%", "95%", "97.5%", "99%"],
+    value="95%",
+    help="Target probability of not running out of stock during the replenishment cycle."
+)
 
 # Map Service Level to Z-score
-z_mapping = {"90%": 1.28, "95%": 1.65, "99%": 2.33}
+z_mapping = {"85%": 1.04, "90%": 1.28, "95%": 1.65, "97.5%": 1.96, "99%": 2.33}
 z_score = z_mapping[service_level]
 
-if not connected:
-    st.sidebar.warning("⚠️ Local MongoDB not running. Displaying simulated cluster data.")
-    
-    # Generate mock time-series data
-    np.random.seed(42)
-    skus = [f"SKU-{1000 + i:04d}" for i in range(30)]
-    mock_history = {}
-    mock_meta = {}
-    
-    for i, sku in enumerate(skus):
-        # Generate raw historical demand data
-        base_demand = np.random.poisson(lam=30 + (i % 3) * 10, size=365).astype(float)
-        trend = np.linspace(0, (i % 4 - 2) * 3, 365)
-        noise = np.random.normal(0, 3, 365)
-        history_vals = np.clip(base_demand + trend + noise, 0, None).tolist()
-        
-        mock_history[sku] = history_vals
-        mean_d = float(np.mean(history_vals))
-        std_d = float(np.std(history_vals))
-        
-        # Calculate dynamic safety stock and reorder point on the fly
-        safety_s = z_score * std_d * np.sqrt(lead_time)
-        rop = (mean_d * lead_time) + safety_s
-        
-        # Random stock level centered around ROP
-        current_st = int(np.random.normal(rop * 1.1, rop * 0.25))
-        current_st = max(10, current_st) # Cap minimum stock
-        
-        # Generate forecast using fallback Double Exponential Smoothing
-        alpha, beta = 0.25, 0.15
-        level = history_vals[0]
-        t_val = history_vals[1] - history_vals[0]
-        for val in history_vals[1:]:
-            next_level = alpha * val + (1.0 - alpha) * (level + t_val)
-            next_trend = beta * (next_level - level) + (1.0 - beta) * t_val
-            level = next_level
-            t_val = next_trend
-        forecast_val = level + 7.0 * t_val # 7 days out
-        
-        mock_meta[sku] = {
-            "sku": sku,
-            "description": f"Industrial manufacturing raw component batch {i} - Grade {chr(65 + (i % 3))}",
-            "mean_demand": mean_d,
-            "std_demand": std_d,
-            "safety_stock": safety_s,
-            "reorder_point": rop,
-            "current_stock": current_st,
-            "forecast": forecast_val
-        }
-        
-    df_items = pd.DataFrame(list(mock_meta.values()))
-else:
-    st.sidebar.success("✅ Connected to MongoDB Cluster.")
-    hist_collection = db.demand_history
-    fore_collection = db.forecasts
-    
-    history_docs = list(hist_collection.find())
-    forecast_docs = list(fore_collection.find())
-    
-    if not history_docs:
-        st.warning("Database empty. Run worker.py to compute and initialize data.")
-        st.stop()
-        
-    df_items = pd.DataFrame(history_docs)
-    df_forecasts = pd.DataFrame(forecast_docs)
-    
-    if not df_forecasts.empty:
-        df_items = df_items.merge(df_forecasts[["sku", "forecast", "mean_demand", "std_demand"]], on="sku", how="left")
-    
-    # Recalculate parameters on the fly based on user inputs
-    df_items["safety_stock"] = z_score * df_items["std_demand"] * np.sqrt(lead_time)
-    df_items["reorder_point"] = (df_items["mean_demand"] * lead_time) + df_items["safety_stock"]
-    
-    if "current_stock" not in df_items.columns:
-        np.random.seed(42)
-        df_items["current_stock"] = np.random.randint(100, 600, size=len(df_items))
+# CSV File Uploader for instant out-of-the-box operations
+st.sidebar.markdown("---")
+st.sidebar.markdown("### **Upload Custom Inventory Data**")
+uploaded_file = st.sidebar.file_uploader("Upload CSV (SKU, Description, History, Stock)", type=["csv"], help="Upload your own warehouse CSV to instantly calculate forecasts and safety stock levels.")
 
-# Calculate dynamic Risk Status for each SKU
-def calculate_risk(row):
+# Global state to hold the dataset
+df_items = None
+mock_history = {}
+
+# Parse Uploaded CSV
+if uploaded_file is not None:
+    try:
+        df_uploaded = pd.read_csv(uploaded_file)
+        # Check required columns
+        required_cols = ["sku", "description", "history", "current_stock"]
+        if all(col in df_uploaded.columns for col in required_cols):
+            # Parse history lists
+            parsed_history = []
+            for h in df_uploaded["history"]:
+                if isinstance(h, str):
+                    parsed_history.append([float(x.strip()) for x in h.strip("[]").split(",") if x.strip()])
+                else:
+                    parsed_history.append([float(x) for x in h])
+            
+            df_uploaded["history"] = parsed_history
+            
+            # Recalculate parameters
+            df_uploaded["mean_demand"] = df_uploaded["history"].apply(np.mean)
+            df_uploaded["std_demand"] = df_uploaded["history"].apply(np.std)
+            
+            # Generate double exponential forecasts
+            alpha, beta = 0.25, 0.15
+            forecasts = []
+            for h_vals in df_uploaded["history"]:
+                level = h_vals[0]
+                t_val = h_vals[1] - h_vals[0]
+                for val in h_vals[1:]:
+                    next_level = alpha * val + (1.0 - alpha) * (level + t_val)
+                    next_trend = beta * (next_level - level) + (1.0 - beta) * t_val
+                    level = next_level
+                    t_val = next_trend
+                forecasts.append(level + 7.0 * t_val)
+            
+            df_uploaded["forecast"] = forecasts
+            df_items = df_uploaded
+            
+            # Load into mock_history dict
+            for _, row in df_uploaded.iterrows():
+                mock_history[row["sku"]] = row["history"]
+            st.sidebar.success("✅ Custom CSV parsed successfully!")
+        else:
+            st.sidebar.error("CSV must contain: sku, description, history, current_stock")
+    except Exception as e:
+        st.sidebar.error(f"Error parsing CSV: {e}")
+
+# If no CSV uploaded, fall back to DB or Mock Data
+if df_items is None:
+    if not connected:
+        # Generate mock time-series data
+        np.random.seed(42)
+        skus = [f"SKU-{1000 + i:04d}" for i in range(30)]
+        mock_meta = {}
+        
+        for i, sku in enumerate(skus):
+            # Base seasonal demand
+            base_demand = np.random.poisson(lam=30 + (i % 3) * 12, size=365).astype(float)
+            trend = np.linspace(0, (i % 4 - 2) * 2.5, 365)
+            noise = np.random.normal(0, 4, 365)
+            history_vals = np.clip(base_demand + trend + noise, 0, None).tolist()
+            
+            mock_history[sku] = history_vals
+            mean_d = float(np.mean(history_vals))
+            std_d = float(np.std(history_vals))
+            
+            # Temporary safety stock & ROP (recalculated dynamically below)
+            safety_s = z_score * std_d * np.sqrt(lead_time)
+            rop = (mean_d * lead_time) + safety_s
+            
+            # Random current stock
+            current_st = int(np.random.normal(rop * 1.15, rop * 0.25))
+            current_st = max(10, current_st)
+            
+            # Holt's linear trend forecast
+            alpha, beta = 0.25, 0.15
+            level = history_vals[0]
+            t_val = history_vals[1] - history_vals[0]
+            for val in history_vals[1:]:
+                next_level = alpha * val + (1.0 - alpha) * (level + t_val)
+                next_trend = beta * (next_level - level) + (1.0 - beta) * t_val
+                level = next_level
+                t_val = next_trend
+            forecast_val = level + 7.0 * t_val
+            
+            mock_meta[sku] = {
+                "sku": sku,
+                "description": f"Industrial raw component batch {i} - Grade {chr(65 + (i % 3))}",
+                "mean_demand": mean_d,
+                "std_demand": std_d,
+                "current_stock": current_st,
+                "forecast": forecast_val,
+                "history": history_vals
+            }
+            
+        df_items = pd.DataFrame(list(mock_meta.values()))
+    else:
+        # Load from MongoDB
+        hist_collection = db.demand_history
+        fore_collection = db.forecasts
+        
+        history_docs = list(hist_collection.find())
+        forecast_docs = list(fore_collection.find())
+        
+        if not history_docs:
+            st.warning("Database empty. Please run worker.py first.")
+            st.stop()
+            
+        df_items = pd.DataFrame(history_docs)
+        df_forecasts = pd.DataFrame(forecast_docs)
+        
+        if not df_forecasts.empty:
+            df_items = df_items.merge(df_forecasts[["sku", "forecast", "mean_demand", "std_demand"]], on="sku", how="left")
+        
+        if "current_stock" not in df_items.columns:
+            np.random.seed(42)
+            df_items["current_stock"] = np.random.randint(100, 600, size=len(df_items))
+
+# Perform calculations dynamically on user adjustments
+df_items["safety_stock"] = (z_score * df_items["std_demand"] * np.sqrt(lead_time)).round(1)
+df_items["reorder_point"] = ((df_items["mean_demand"] * lead_time) + df_items["safety_stock"]).round(1)
+
+# Risk Status Classification
+def classify_risk(row):
     stock = row["current_stock"]
     rop = row["reorder_point"]
     if stock <= (rop * 0.7):
-        return "CRITICAL"
+        return "🔴 CRITICAL"
     elif stock <= rop:
-        return "REORDER"
-    return "SAFE"
+        return "🟡 REORDER"
+    return "🟢 SAFE"
 
-df_items["risk_status"] = df_items.apply(calculate_risk, axis=1)
+df_items["risk_status"] = df_items.apply(classify_risk, axis=1)
 
-# Metric layout indicators
-col1, col2, col3, col4 = st.columns(4)
-with col1:
-    st.markdown('<div class="metric-card"><h4>Safety Stock Recs</h4><h2>SIMD Adaptive</h2></div>', unsafe_allow_html=True)
-with col2:
-    st.markdown('<div class="metric-card"><h4>C++ Core Speedup</h4><h2>41.5 GFLOPS (47x)</h2></div>', unsafe_allow_html=True)
-with col3:
-    st.markdown('<div class="metric-card"><h4>Active Cluster Nodes</h4><h2>64 MPI Workers</h2></div>', unsafe_allow_html=True)
-with col4:
-    critical_count = len(df_items[df_items["risk_status"] == "CRITICAL"])
-    st.markdown(f'<div class="metric-card"><h4>Critical Shortage SKUs</h4><h2>{critical_count} Items</h2></div>', unsafe_allow_html=True)
+# Split Dashboard into 2 Tabs
+tab_overview, tab_deepdive = st.tabs(["📊 Operational Control Center", "📈 SKU Analysis & Simulator"])
 
-# Main Grid split
-left_pane, right_pane = st.columns([1.1, 1.9])
+# ================= TAB 1: OPERATIONAL CONTROL CENTER =================
+with tab_overview:
+    # High-level analytical metrics
+    col_stat1, col_stat2, col_stat3, col_stat4 = st.columns(4)
+    with col_stat1:
+        total_skus = len(df_items)
+        st.markdown(f'<div class="metric-card"><h4>Active SKU Coverage</h4><h2>{total_skus} Items</h2></div>', unsafe_allow_html=True)
+    with col_stat2:
+        critical_items = len(df_items[df_items["risk_status"] == "🔴 CRITICAL"])
+        st.markdown(f'<div class="metric-card"><h4>Stockout Emergencies</h4><h2>{critical_items} SKUs</h2></div>', unsafe_allow_html=True)
+    with col_stat3:
+        reorder_items = len(df_items[df_items["risk_status"] == "🟡 REORDER"])
+        st.markdown(f'<div class="metric-card"><h4>Reorders Triggered</h4><h2>{reorder_items} SKUs</h2></div>', unsafe_allow_html=True)
+    with col_stat4:
+        safe_percentage = (len(df_items[df_items["risk_status"] == "🟢 SAFE"]) / total_skus) * 100
+        st.markdown(f'<div class="metric-card"><h4>Service SLA Coverage</h4><h2>{safe_percentage:.1f}%</h2></div>', unsafe_allow_html=True)
 
-with left_pane:
-    st.subheader("📋 Production SKU Monitor")
-    search_query = st.text_input("🔍 Filter by SKU or Description", "")
-    
-    filtered_df = df_items
-    if search_query:
-        filtered_df = df_items[
-            df_items["sku"].str.contains(search_query, case=False) |
-            df_items["description"].str.contains(search_query, case=False)
+    # Advanced filter row
+    col_f1, col_f2 = st.columns([2, 1])
+    with col_f1:
+        search_filter = st.text_input("🔍 Search SKU or Description", "", key="overview_search")
+    with col_f2:
+        status_filter = st.multiselect("Filter by Status", ["🟢 SAFE", "🟡 REORDER", "🔴 CRITICAL"], default=["🟢 SAFE", "🟡 REORDER", "🔴 CRITICAL"])
+
+    # Filtering data
+    display_df = df_items.copy()
+    if search_filter:
+        display_df = display_df[
+            display_df["sku"].str.contains(search_filter, case=False) |
+            display_df["description"].str.contains(search_filter, case=False)
         ]
-        
-    # Format datatable for display
-    display_df = filtered_df[["sku", "current_stock", "reorder_point", "risk_status"]].copy()
-    display_df["reorder_point"] = display_df["reorder_point"].round(1)
+    display_df = display_df[display_df["risk_status"].isin(status_filter)]
+
+    # Dynamic Table
+    st.subheader("📋 Active Inventory Pipeline")
+    
+    table_view = display_df[["sku", "description", "current_stock", "safety_stock", "reorder_point", "forecast", "risk_status"]].copy()
+    table_view["forecast"] = table_view["forecast"].round(1)
     
     st.dataframe(
-        display_df,
+        table_view,
         use_container_width=True,
         hide_index=True,
         column_config={
             "sku": "SKU Code",
-            "current_stock": "Current Stock",
-            "reorder_point": "Reorder Threshold",
-            "risk_status": "Status Flag"
+            "description": "Component Specification",
+            "current_stock": "Current Inventory Level",
+            "safety_stock": "Safety Stock Target",
+            "reorder_point": "Reorder Point (ROP)",
+            "forecast": "7-Day Predicted Demand",
+            "risk_status": "Operational Status"
         }
     )
 
-with right_pane:
-    st.subheader("📈 Inventory Trend & Safety Thresholds")
-    selected_sku = st.selectbox("Select Target SKU for Optimization Run", df_items["sku"].unique())
+    # Bulk Export Button
+    st.markdown("---")
+    st.subheader("📥 Export Operational Reports")
+    csv_buffer = io.StringIO()
+    table_view.to_csv(csv_buffer, index=False)
+    st.download_button(
+        label="Download Active Forecast Report (CSV)",
+        data=csv_buffer.getvalue(),
+        file_name="Apex_Inventory_Forecasts_Report.csv",
+        mime="text/csv",
+        help="Export all SKU calculations to upload directly into your ERP/MRP system."
+    )
+
+# ================= TAB 2: SKU ANALYSIS & SIMULATOR =================
+with tab_deepdive:
+    col_sim1, col_sim2 = st.columns([1, 2])
     
-    # Retrieve details for chosen SKU
-    sku_row = df_items[df_items["sku"] == selected_sku].iloc[0]
-    
-    if not connected:
-        history = mock_history[selected_sku]
-    else:
-        history = sku_row["history"]
+    with col_sim1:
+        st.subheader("📦 SKU Parameters")
+        selected_sku = st.selectbox("Select Target SKU to Run Simulation", df_items["sku"].unique())
+        sku_details = df_items[df_items["sku"] == selected_sku].iloc[0]
         
-    description = sku_row["description"]
-    current_stock = int(sku_row["current_stock"])
-    forecast_val = float(sku_row["forecast"])
-    safety_stock = float(sku_row["safety_stock"])
-    reorder_point = float(sku_row["reorder_point"])
-    status = sku_row["risk_status"]
-    
-    # Display Alert Banner based on status
-    if status == "CRITICAL":
-        st.error(f"🔴 **CRITICAL ALERT:** Stock level ({current_stock}) is critically below the Reorder Point ({reorder_point:.1f}). Lead time risk is HIGH.")
-    elif status == "REORDER":
-        st.warning(f"🟡 **REORDER ALERT:** Stock level ({current_stock}) is below the Reorder Point ({reorder_point:.1f}). Trigger assembly batch orders.")
-    else:
-        st.success(f"🟢 **INVENTORY ADEQUATE:** Stock level ({current_stock}) is safely above the Reorder Point ({reorder_point:.1f}).")
+        # Display operational summaries
+        st.info(f"**Item Name:** {sku_details['description']}")
         
-    st.markdown(f"**Item Specification:** *{description}*")
-    
-    # Plotting using custom styling
-    plt.style.use('dark_background')
-    fig, ax = plt.subplots(figsize=(10, 4.5))
-    
-    days = range(1, len(history) + 1)
-    ax.plot(days, history, label="Historical Daily Demand", color="#00f2fe", alpha=0.6, linewidth=1.5)
-    
-    # Draw moving average
-    ma_30 = pd.Series(history).rolling(window=30).mean()
-    ax.plot(days, ma_30, label="30-day MA Trend", color="#ff007f", linestyle="--", linewidth=1.5, alpha=0.9)
-    
-    # Draw projected forecast trendline (Holt's linear trend projection)
-    forecast_days = range(len(history), len(history) + 8)
-    forecast_path = [history[-1]] + [history[-1] + (forecast_val - history[-1]) * (i / 7) for i in range(1, 8)]
-    ax.plot(forecast_days, forecast_path, color="#39ff14", linestyle=":", linewidth=2, label="7-Day C++ Holt Projection")
-    ax.scatter(len(history) + 7, forecast_val, color="#39ff14", s=120, zorder=5, label="Target Forecast Point")
-    
-    # Draw safety thresholds
-    ax.axhline(y=reorder_point, color="#ffaa00", linestyle="-.", alpha=0.8, label=f"Reorder Point ({reorder_point:.1f})")
-    ax.axhline(y=safety_stock, color="#ff0000", linestyle=":", alpha=0.8, label=f"Safety Stock ({safety_stock:.1f})")
-    
-    ax.set_title(f"Demand Profile & Stock Thresholds: {selected_sku}", fontsize=14, pad=15)
-    ax.set_xlabel("Days (Time Series Timeline)", fontsize=10)
-    ax.set_ylabel("Quantity Demanded / Stock", fontsize=10)
-    ax.grid(color='gray', linestyle=':', linewidth=0.5, alpha=0.3)
-    ax.legend(loc="upper left", framealpha=0.3)
-    
-    st.pyplot(fig)
-    
-    # Technical execution statistics
-    col_stat1, col_stat2, col_stat3 = st.columns(3)
-    with col_stat1:
-        st.write(f"**Safety Stock Target:** {safety_stock:.1f} Units")
-    with col_stat2:
-        st.write(f"**Calculated Daily Mean:** {sku_row['mean_demand']:.2f}")
-    with col_stat3:
-        st.write(f"**Historical Daily StdDev:** {sku_row['std_demand']:.2f}")
+        # In-line Stock Editor for simulated forecasting runs
+        simulated_stock = st.number_input(
+            "Modify Stock Level (Test What-If Scenarios)",
+            min_value=0,
+            max_value=5000,
+            value=int(sku_details["current_stock"]),
+            step=10,
+            help="Simulate a receipt of goods or rapid usage to test reorder status triggers."
+        )
         
-    st.markdown("""
-    <div style="background: rgba(255, 255, 255, 0.01); border-radius: 8px; padding: 12px; border: 1px solid rgba(255,255,255,0.05); font-size: 11px;">
-        <strong>HPC Kernel Specifications:</strong> Parallel vectorization over 8 SKUs simultaneously via 256-bit SIMD registers. 
-        Zero-copy Pybind11 memory mapping interface used for zero cache latency.
-    </div>
-    """, unsafe_allow_html=True)
+        # Re-evaluating status for simulation
+        sim_rop = sku_details["reorder_point"]
+        if simulated_stock <= (sim_rop * 0.7):
+            sim_status = "🔴 CRITICAL EMERGENCY"
+            status_color = "red"
+        elif simulated_stock <= sim_rop:
+            sim_status = "🟡 REORDER TRIGGERED"
+            status_color = "orange"
+        else:
+            sim_status = "🟢 STOCK LEVEL ADEQUATE"
+            status_color = "green"
+            
+        st.markdown(f"**Simulated Status:** <span style='color:{status_color}; font-weight:bold;'>{sim_status}</span>", unsafe_allow_html=True)
+        
+        # Details stats breakdown
+        st.markdown("---")
+        st.markdown("#### **Execution Statistics**")
+        st.write(f"- **Calculated Daily Mean:** {sku_details['mean_demand']:.2f} Units")
+        st.write(f"- **Demand Variance (Std Dev):** {sku_details['std_demand']:.2f}")
+        st.write(f"- **Current Safety Stock Buffer:** {sku_details['safety_stock']:.1f} Units")
+        st.write(f"- **Reorder Point Threshold:** {sku_details['reorder_point']:.1f} Units")
+        st.write(f"- **7-Day Out Forecast Prediction:** {sku_details['forecast']:.1f} Units")
+        
+    with col_sim2:
+        st.subheader("📈 Interactive Demand Profile & Buffer Chart")
+        
+        # Fetch historical list
+        if not connected and uploaded_file is None:
+            history = mock_history[selected_sku]
+        else:
+            history = sku_details["history"]
+            
+        # Draw Matplotlib Chart with premium dark theme
+        plt.style.use('dark_background')
+        fig, ax = plt.subplots(figsize=(10, 5))
+        
+        days = range(1, len(history) + 1)
+        ax.plot(days, history, label="Historical Daily Demand", color="#00f2fe", alpha=0.5, linewidth=1.5)
+        
+        # 30-day moving average
+        ma_30 = pd.Series(history).rolling(window=30).mean()
+        ax.plot(days, ma_30, label="30-day Moving Average", color="#ff007f", linestyle="--", linewidth=1.5, alpha=0.8)
+        
+        # Projected forecast trendline
+        forecast_days = range(len(history), len(history) + 8)
+        forecast_path = [history[-1]] + [history[-1] + (sku_details["forecast"] - history[-1]) * (i / 7) for i in range(1, 8)]
+        ax.plot(forecast_days, forecast_path, color="#39ff14", linestyle=":", linewidth=2, label="7-Day Holt Prediction")
+        ax.scatter(len(history) + 7, sku_details["forecast"], color="#39ff14", s=130, zorder=5)
+        
+        # Draw safety thresholds
+        ax.axhline(y=sim_rop, color="#ffaa00", linestyle="-.", alpha=0.8, label=f"Reorder Point ({sim_rop:.1f})")
+        ax.axhline(y=sku_details["safety_stock"], color="#ff0000", linestyle=":", alpha=0.8, label=f"Safety Stock ({sku_details['safety_stock']:.1f})")
+        
+        # Mark current stock level
+        ax.axhline(y=simulated_stock, color="#ffffff", linestyle="--", alpha=0.4, label=f"Simulated Stock ({simulated_stock})")
+        
+        # Format chart details
+        ax.set_title(f"Visual Optimization Engine for {selected_sku}", fontsize=14, pad=15)
+        ax.set_xlabel("Days (Historical Time Series)", fontsize=10)
+        ax.set_ylabel("Quantity (Units)", fontsize=10)
+        ax.grid(color='gray', linestyle=':', linewidth=0.5, alpha=0.2)
+        ax.legend(loc="upper left", framealpha=0.2)
+        
+        st.pyplot(fig)
+        
+        st.markdown("""
+        <div style="background: rgba(255,255,255,0.01); border-radius: 8px; padding: 12px; border: 1px solid rgba(255,255,255,0.05); font-size: 11px; margin-top: 10px;">
+            <strong>Double Exponential Forecasting Core (Holt's Model):</strong> Calculates level and trend updates simultaneously using 256-bit AVX2 SIMD operations. 
+            Reorder thresholds and safety stock are adjusted dynamically as you slide lead-times or coverage requirements.
+        </div>
+        """, unsafe_allow_html=True)
