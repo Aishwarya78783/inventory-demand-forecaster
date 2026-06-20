@@ -1,4 +1,4 @@
-name: Build and Push Forecasting App
+name: Global Manufacturing & Supply Chain Demand Forecaster
 
 on:
   push:

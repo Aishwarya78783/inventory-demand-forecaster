@@ -2,7 +2,7 @@
 
 Hi, Aishwarya here. This is a high-performance inventory demand forecasting engine optimized for HPC and exascale cluster environments. 
 
-Instead of relying on slow Python loops or pandas calculations for thousands of SKUs, I wrote a C++ compute kernel vectorized with AVX2 SIMD instructions (FMA - Fused Multiply-Add) to get maximum performance out of the CPU. It uses OpenMP for multi-threading, MongoDB to store transaction history, MPI to distribute workloads across nodes, and a sleek Streamlit dashboard to show everything.
+Instead of relying on slow Python loops or pandas calculations for thousands of SKUs, I wrote a C++ compute kernel vectorized with AVX2 SIMD instructions (FMA - Fused Multiply-Add) to get maximum performance out of the CPU. It uses OpenMP for multi-threading, MongoDB to store transaction history, MPI to distribute workloads across nodes, and a sleek Streamlit dashboard to show it .
 
 ## Tech Stack
 * **Core math**: C++ (AVX2 SIMD, OpenMP)
